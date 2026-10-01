@@ -9,4 +9,4 @@ resources:
   - servicemonitor.yaml
 images:
   - name: ghcr.io/millerdevops/python-api
-    newTag: "f793f84"
+    newTag: "036cf4a"
