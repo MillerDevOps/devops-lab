@@ -1,0 +1,10 @@
+configs:
+  params:
+    # TLS se omite porque accedemos por port-forward (túnel SSH), no por Internet
+    server.insecure: true
+
+# Componentes que no necesitamos en el laboratorio
+dex:
+  enabled: false
+notifications:
+  enabled: false

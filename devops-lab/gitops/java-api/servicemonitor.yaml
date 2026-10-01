@@ -1,0 +1,13 @@
+# Le dice a Prometheus que recolecte las métricas de esta app
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: java-api
+spec:
+  selector:
+    matchLabels:
+      app: java-api
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 30s

@@ -1,0 +1,2 @@
+# Copia este archivo como terraform.tfvars (está en .gitignore, no se sube a Git)
+grafana_admin_password = "CambiaEstaClave-2026"

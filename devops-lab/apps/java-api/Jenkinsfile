@@ -1,0 +1,163 @@
+// =====================================================================
+// java-api | Pipeline CI/CD con Jenkins + GitOps (ArgoCD)
+// Flujo: Jenkins construye, prueba, escanea y publica la imagen, y luego
+// actualiza la versión en gitops/. ArgoCD detecta el cambio y despliega.
+// Jenkins NUNCA toca el cluster directamente (modelo "pull" de GitOps).
+// ---------------------------------------------------------------------
+// Credenciales en Jenkins:
+//   github-creds -> Username/Password: usuario GitHub + token (PAT) con
+//                   permisos "repo" y "write:packages"
+// SonarQube configurado en Jenkins con el nombre: sonarqube
+// =====================================================================
+
+def REPO_URL = 'github.com/MillerDevOps/devops-lab.git'
+
+pipeline {
+    agent any
+
+    environment {
+        APP_DIR = 'apps/java-api'
+        IMAGE   = 'ghcr.io/millerdevops/java-api'
+        MVN_IMG = 'maven:3.9-eclipse-temurin-17'
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    def msg = sh(script: 'git log -1 --pretty=%B', returnStdout: true)
+                    // Monorepo: solo construir si cambió apps/java-api
+                    def base = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: 'HEAD~1'
+                    def changed = sh(script: "git diff --name-only ${base} HEAD | grep -c '^apps/java-api/' || true",
+                                     returnStdout: true).trim()
+                    env.SKIP = (msg.contains('[skip ci]') || changed == '0') ? 'true' : 'false'
+                    if (env.SKIP == 'true') {
+                        echo 'Sin cambios en java-api (o commit [skip ci]). No se construye.'
+                        currentBuild.result = 'NOT_BUILT'
+                    }
+                }
+            }
+        }
+
+        stage('Build') {
+            when { expression { env.SKIP != 'true' } }
+            steps { mvn('-B compile') }
+        }
+
+        stage('Unit Tests') {
+            when { expression { env.SKIP != 'true' } }
+            steps { mvn('-B test') }
+            post {
+                always { junit allowEmptyResults: true, testResults: 'apps/java-api/target/surefire-reports/*.xml' }
+            }
+        }
+
+        stage('Code Quality') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    mvn('-B sonar:sonar -Dsonar.projectKey=java-api -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.token=$SONAR_AUTH_TOKEN')
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                // Requiere webhook en SonarQube -> https://jenkins.stylopos.com/sonarqube-webhook/
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Package') {
+            when { expression { env.SKIP != 'true' } }
+            steps { mvn('-B package -DskipTests') }
+        }
+
+        stage('Build Docker Image') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                sh 'docker build --build-arg APP_VERSION=$TAG -t $IMAGE:$TAG $APP_DIR'
+            }
+        }
+
+        stage('Image Scan') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                // Falla el pipeline si hay vulnerabilidades CRÍTICAS con parche disponible
+                sh '''
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v trivy-cache:/root/.cache/ \
+                      aquasec/trivy:latest image \
+                      --exit-code 1 --severity CRITICAL --ignore-unfixed \
+                      $IMAGE:$TAG
+                '''
+            }
+        }
+
+        stage('Push Image') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-creds',
+                                                  usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                    sh '''
+                        echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
+                        docker push $IMAGE:$TAG
+                        docker logout ghcr.io
+                    '''
+                }
+            }
+        }
+
+        stage('Update GitOps') {
+            when { expression { env.SKIP != 'true' } }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-creds',
+                                                  usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
+                    sh """
+                        git config user.name  'jenkins'
+                        git config user.email 'jenkins@stylopos.com'
+                        git fetch origin main
+                        git checkout -B main origin/main
+                        sed -i 's/newTag: .*/newTag: "'\$TAG'"/' gitops/java-api/kustomization.yaml
+                        git add gitops/java-api/kustomization.yaml
+                        git commit -m "deploy(java-api): \$TAG [skip ci]"
+                        git pull --rebase origin main
+                        git push https://\$GH_USER:\$GH_TOKEN@${REPO_URL} main
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo "java-api ${env.TAG} publicado. ArgoCD lo desplegará en segundos." }
+        failure { echo "Falló el pipeline de java-api. Revisa: ${env.BUILD_URL}" }
+        always  { sh 'docker image prune -f || true' }
+    }
+}
+
+// Ejecuta Maven dentro de un contenedor (no hace falta instalar Maven en Jenkins).
+// La caché ~/.m2 se reutiliza entre builds para que sea rápido.
+def mvn(String args) {
+    sh """
+        mkdir -p \$HOME/.m2
+        docker run --rm --network host -u \$(id -u):\$(id -g) \
+          -v "\$PWD/${env.APP_DIR}":/src -w /src \
+          -v "\$HOME/.m2":/var/maven/.m2 -e MAVEN_CONFIG=/var/maven/.m2 \
+          ${env.MVN_IMG} mvn -Duser.home=/var/maven ${args}
+    """
+}

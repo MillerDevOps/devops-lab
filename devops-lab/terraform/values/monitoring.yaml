@@ -1,0 +1,31 @@
+# Ajustes para un VPS pequeño con k3s
+
+# En k3s estos componentes no exponen métricas igual que en un cluster normal;
+# se desactivan para evitar alertas falsas.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    # Recolecta TODOS los ServiceMonitor del cluster, no solo los del chart
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: 50Mi

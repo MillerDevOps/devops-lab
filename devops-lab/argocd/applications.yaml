@@ -1,0 +1,44 @@
+# ArgoCD vigila la carpeta gitops/ del repo y mantiene el cluster igual a Git.
+#   automated.prune:    si borras algo en Git, lo borra del cluster
+#   automated.selfHeal: si alguien cambia algo a mano en el cluster, lo revierte
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: java-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/MillerDevOps/devops-lab.git
+    targetRevision: main
+    path: gitops/java-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: java-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: python-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/MillerDevOps/devops-lab.git
+    targetRevision: main
+    path: gitops/python-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: python-api
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
