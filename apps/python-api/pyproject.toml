@@ -1,0 +1,9 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# La carpeta del proyecto: así Ruff sabe que "app" es código propio
+src = ["."]
+
+[tool.ruff.lint]
+# E/F: errores y estilo básico · I: orden de imports
+select = ["E", "F", "I"]
