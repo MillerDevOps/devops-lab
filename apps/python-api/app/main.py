@@ -42,7 +42,7 @@ def info():
 
 @app.get("/api/saludo")
 def saludo(nombre: str = "mundo"):
-    return {"mensaje": f"Hola, {nombre}!"}
+    return {"mensaje": f"Hola, {nombre}! Desplegado con CI/CD"}
 
 
 # Endpoints para las probes de Kubernetes

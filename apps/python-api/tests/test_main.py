@@ -23,7 +23,7 @@ def test_info_devuelve_datos_del_pod():
 def test_saludo_usa_el_nombre():
     r = client.get("/api/saludo", params={"nombre": "Miller"})
     assert r.status_code == 200
-    assert r.json()["mensaje"] == "Hola, Miller!"
+    assert r.json()["mensaje"] == "Hola, Miller! Desplegado con CI/CD"
 
 
 def test_health():
