@@ -9,4 +9,4 @@ resources:
   - servicemonitor.yaml
 images:
   - name: ghcr.io/millerdevops/python-api
-    newTag: "v1"   # el pipeline actualiza esta línea en cada despliegue
+    newTag: "30c8036"
