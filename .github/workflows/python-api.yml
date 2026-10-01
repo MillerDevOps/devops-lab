@@ -59,12 +59,18 @@ jobs:
     needs: ci
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}   # se lo pasa al job de despliegue
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Definir versión (hash del commit)
-        run: echo "TAG=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+        id: version
+        run: |
+          TAG=$(git rev-parse --short HEAD)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker Image
         run: docker build --build-arg APP_VERSION=$TAG -t $IMAGE:$TAG $APP_DIR
@@ -95,3 +101,50 @@ jobs:
           git commit -m "deploy(python-api): $TAG [skip ci]"
           git pull --rebase origin main
           git push origin HEAD:main
+
+  # ---------------- Despliegue en el VPS con Docker (modelo PUSH por SSH)
+  # GitHub Actions entra al servidor, descarga la imagen nueva y recrea el contenedor.
+  # (En Kubernetes lo hará ArgoCD con el modelo PULL.)
+  deploy-vps:
+    name: Deploy - VPS (Docker)
+    needs: cd
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preparar llave SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Desplegar contenedor y verificar (smoke test)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          TAG: ${{ needs.cd.outputs.tag }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" bash -s <<EOF
+          set -e
+          IMAGE=ghcr.io/millerdevops/python-api:$TAG
+          echo ">> Descargando \$IMAGE"
+          docker pull \$IMAGE
+          echo ">> Recreando el contenedor"
+          docker rm -f py 2>/dev/null || true
+          docker run -d --name py --restart unless-stopped -p 8000:8000 \$IMAGE
+          echo ">> Smoke test: esperando a que la app responda"
+          for i in \$(seq 1 15); do
+            if curl -fsS localhost:8000/health/ready > /dev/null; then
+              echo ">> OK: versión $TAG desplegada y respondiendo"
+              curl -s localhost:8000/api/info; echo
+              exit 0
+            fi
+            sleep 2
+          done
+          echo ">> ERROR: la app no respondió"
+          docker logs py --tail 50
+          exit 1
+          EOF
